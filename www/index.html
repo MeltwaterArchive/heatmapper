@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>DataSift Heatmapper</title>
+		<style>
+			#controls {
+				position: absolute;
+				top: 0;
+				bottom: 50px;
+				left: 0;
+				right: 0;
+				padding: 10px;
+			}
+			#controls button,
+			#controls input,
+			#controls select {
+				padding: 7px 5px;
+			}
+			#controls button#restart-button {
+				float: right;
+			}
+			#map {
+				position: absolute;
+				top: 50px;
+				bottom: 0;
+				left: 0;
+				right: 0;
+				background-color: #ccc;
+			}
+			.controls {
+				margin-top: 10px;
+				border: 1px solid transparent;
+				border-radius: 2px 0 0 2px;
+				box-sizing: border-box;
+				-moz-box-sizing: border-box;
+				height: 32px;
+				outline: none;
+				box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+			}
+
+			#search-box {
+				background-color: #fff;
+				font-family: Roboto;
+				font-size: 15px;
+				font-weight: 300;
+				margin-left: 12px;
+				padding: 0 11px 0 13px;
+				text-overflow: ellipsis;
+				width: 300px;
+			}
+			
+			#search-box:focus {
+				border-color: #4d90fe;
+			}
+
+			.pac-container {
+				font-family: Roboto;
+			}
+
+			#type-selector {
+				color: #fff;
+				background-color: #4d90fe;
+				padding: 5px 11px 0px 11px;
+			}
+
+			#type-selector label {
+				font-family: Roboto;
+				font-size: 13px;
+				font-weight: 300;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="controls">
+			<span>Points:</span>
+			<select size="1" onchange="maxPointsChanged(this.value);">
+				<option value="1">1</option>
+				<option value="5">5</option>
+				<option value="10">10</option>
+				<option value="25">25</option>
+				<option value="50">50</option>
+				<option value="100">100</option>
+				<option value="250">250</option>
+				<option value="500">500</option>
+				<option value="1000">1,000</option>
+				<option value="1500">1,500</option>
+				<option value="2500">2,500</option>
+				<option value="5000" selected="selected">5,000</option>
+				<option value="10000">10,000</option>
+				<option value="15000">15,000</option>
+				<option value="25000">25,000</option>
+				<option value="50000">50,000</option>
+			</select>
+			<button id="clear-button" onclick="pointArray.clear();">clear</button>
+			<span style="padding-left: 25px;">CSDL:</span>
+			<input id="csdl" type="text" placeholder="Enter optional CSDL here..." style="width: 50%;" />
+			<span style="padding-left: 25px;">Sample:</span>
+			<select id="sample-rate" size="1">
+				<option value="1">1%</option>
+				<option value="1.5">1.5%</option>
+				<option value="2.5">2.5%</option>
+				<option value="5">5%</option>
+				<option value="10">10%</option>
+				<option value="15">15%</option>
+				<option value="20">20%</option>
+				<option value="25">25%</option>
+				<option value="50">50%</option>
+				<option value="75">75%</option>
+				<option value="100" selected="selected">100%</option>
+			</select>
+			<button id="restart-button" onclick="restartStream();">restart stream</button>
+		</div>
+		<input id="search-box" class="controls" type="text" placeholder="Enter location...">
+		<div id="map"></div>
+		<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBf1-A3kG1r-WrFt3trLcTLaSi6Y7KnMvM&amp;libraries=geometry,visualization,places"></script>
+		<script src="/socket.io/socket.io.js"></script>
+		<script>
+			var socket = io();
+			socket.on('connection', function(socket) {
+				sendBounds();
+			});
+
+			// Orange: #fa7f36
+			var map, heatmap;
+			var pointArray = new google.maps.MVCArray();
+			var maxPoints = 5000;
+
+			function restartStream() {
+				if (socket) {
+					var csdl = document.getElementById('csdl').value;
+					var sample_rate = document.getElementById('sample-rate').value;
+
+					// Should we suggest enforce a sample rate change?
+					var zoom = map.getZoom();
+					if (csdl == '' && zoom < 11) {
+						var new_sample_rate = -1;
+						switch (zoom) {
+							case 1:
+							case 2:
+							case 3:
+							case 4:
+								new_sample_rate = 1;
+								break;
+							case 5:
+								if (sample_rate > 5) {
+									new_sample_rate = 5;
+								}
+								break;
+							case 6:
+								if (sample_rate > 10) {
+									new_sample_rate = 10;
+								}
+								break;
+							case 7:
+								if (sample_rate > 15) {
+									new_sample_rate = 15;
+								}
+								break;
+							case 8:
+								if (sample_rate > 25) {
+									new_sample_rate = 25;
+								}
+								break;
+							case 9:
+								if (sample_rate > 50) {
+									new_sample_rate = 50;
+								}
+								break;
+							case 10:
+								if (sample_rate > 75) {
+									new_sample_rate = 75;
+								}
+								break;
+						}
+						if (new_sample_rate != sample_rate) {
+							document.getElementById('sample-rate').value = new_sample_rate;
+							sample_rate = new_sample_rate;
+							alert('The sample rate has been set to ' + sample_rate + '% due to your zoom level. You can increase this once the stream has been started but you may be disconnected if the rate of interactions received is higher than your computer can process.');
+						}
+					}
+
+					var currentBounds = map.getBounds();
+					socket.emit('restart-stream', {"csdl": csdl, "sample": sample_rate, "bounds": {"ne": [currentBounds.getNorthEast().lat(), currentBounds.getNorthEast().lng()], "sw": [currentBounds.getSouthWest().lat(), currentBounds.getSouthWest().lng()]}});
+					setTimeout(function() { pointArray.clear(); }, 2000);
+				}
+			}
+
+			function maxPointsChanged(newValue) {
+				maxPoints = newValue;
+				document.getElementById('max-points').value = maxPoints;
+			}
+
+			function setHeatMapGradiant(fromRed, fromGreen, fromBlue, toRed, toGreen, toBlue, steps) {
+				var gradient = [ 'rgba(255, 255, 255, 0)' ];
+				var redChange = (toRed - fromRed) / steps;
+				var greenChange = (toGreen - fromGreen) / steps;
+				var blueChange = (toBlue - fromBlue) / steps;
+
+				for (i = 0; i < steps; i++) {
+					gradient.push('rgba(' + Math.round(fromRed + (redChange * i)) + ',' + Math.round(fromGreen + (greenChange * i)) + ',' + Math.round(fromBlue + (blueChange * i)) + ',1)');
+				}
+				console.log(gradient);
+				heatmap.set('gradient', gradient);
+			}
+			
+			google.maps.event.addDomListener(window, 'load', function() {
+				var mapCanvas = document.getElementById('map');
+				var mapOptions = {
+					center: {lat: 36.169941, lng: -115.13983},
+					zoom: 11,
+					mapTypeId: google.maps.MapTypeId.ROADMAP,
+					disableDefaultUI: true,
+					zoomControl: true,
+					zoomControlOptions: {
+						position: google.maps.ControlPosition.TOP_RIGHT
+					},
+					mapTypeControl: true,
+					scaleControl: true,
+					streetViewControl: false,
+				}
+
+				map = new google.maps.Map(mapCanvas, mapOptions);
+				map.data.setStyle(function(feature) {
+					var magnitude = feature.getProperty('mag');
+					return {
+						icon: getCircle(magnitude)
+					};
+				});
+
+				// Connect to the websocket server through which we'll get a coordinate stream.
+				socket.on('coords', function(coords) {
+					pointArray.push(new google.maps.LatLng(coords.latitude, coords.longitude));
+					while (pointArray.getLength() > maxPoints) {
+						pointArray.removeAt(0);
+					}
+				});
+
+				// Connect to the websocket server through which we'll get a coordinate stream.
+				socket.on('error', function(error) {
+					alert(error.message);
+				});
+
+				// Create the search box and link it to the UI element.
+				var input = document.getElementById('search-box');
+				var searchBox = new google.maps.places.SearchBox(input);
+				map.controls[google.maps.ControlPosition.TOP_LEFT].push(input);
+				searchBox.addListener('places_changed', function() {
+					var places = searchBox.getPlaces();
+					map.setCenter(places[0].geometry.location);
+				});
+
+				heatmap = new google.maps.visualization.HeatmapLayer({
+					data: pointArray,
+					map: map,
+					radius: 30
+				});
+				setHeatMapGradiant(255, 255, 0, 255, 0, 0, 25);
+			});
+		</script>
+	</body>
+</html>
